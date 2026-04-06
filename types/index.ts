@@ -79,3 +79,49 @@ export interface AuthSession {
   access_token: string
   expires_at: number
 }
+
+// ─── Learning memory ──────────────────────────────────────────────────────────
+
+export interface LearningMemory {
+  id: string
+  child_id: string
+  subject: string
+  topic: string
+  last_position: string | null
+  depth_level: number
+  concepts_mastered: string[] | null
+  concepts_struggling: string[] | null
+  total_sessions: number
+  total_minutes: number
+  last_session_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SessionHistory {
+  id: string
+  child_id: string
+  subject: string
+  topic: string
+  started_at: string
+  ended_at: string | null
+  duration_minutes: number | null
+  was_interrupted: boolean
+  interrupted_at_phase: string | null
+  depth_reached: number
+  concepts_covered: string[] | null
+  performance_score: number | null
+  conversation_summary: string | null
+  raw_messages: unknown
+}
+
+export interface EngagementMetric {
+  id: string
+  child_id: string
+  session_id: string
+  metric_type: string
+  subject: string | null
+  topic: string | null
+  value: unknown
+  occurred_at: string
+}

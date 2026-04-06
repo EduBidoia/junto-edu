@@ -23,15 +23,15 @@ export async function POST(request: NextRequest) {
       model: 'tts-1',
       voice: 'nova',
       input,
+      response_format: 'mp3',
     })
 
-    const buffer = Buffer.from(await mp3.arrayBuffer())
-
-    return new Response(buffer, {
+    // Pipe the stream directly — evita buffering completo no servidor
+    return new Response(mp3.body as ReadableStream, {
       headers: {
         'Content-Type': 'audio/mpeg',
-        'Content-Length': buffer.byteLength.toString(),
         'Cache-Control': 'no-store',
+        'Transfer-Encoding': 'chunked',
       },
     })
   } catch (err) {

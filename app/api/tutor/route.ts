@@ -1,5 +1,7 @@
 import OpenAI from 'openai'
 import { type NextRequest } from 'next/server'
+import { createSupabaseServerClient } from '@/lib/supabase-server'
+import type { LearningMemory, SessionHistory } from '@/types'
 
 interface HistoryMessage {
   role: 'user' | 'model'
@@ -8,7 +10,8 @@ interface HistoryMessage {
 
 interface RequestBody {
   message?: string
-  init?: boolean        // true na primeira chamada — gera a pergunta de abertura
+  init?: boolean
+  childId?: string
   studentName: string
   grade: string | null
   age: number | null
@@ -17,100 +20,153 @@ interface RequestBody {
   history: HistoryMessage[]
 }
 
+interface MemoryContext {
+  depthLevel: number
+  lastPosition: string | null
+  conceptsMastered: string[]
+  conceptsStruggling: string[]
+  totalSessions: number
+  hasPriorHistory: boolean
+}
+
 function buildSystemPrompt(
   studentName: string,
   grade: string | null,
   age: number | null,
   subject: string,
   topic: string,
+  memory: MemoryContext,
 ): string {
   const gradeLabel = grade ?? 'não informada'
   const ageLabel = age ? `${age} anos` : 'não informada'
+  const isYoung = age !== null && age <= 14
+  const toneNote = isYoung
+    ? 'Tom: leve, animado, exemplos do cotidiano (jogos, comida, amigos), celebrações expressivas.'
+    : 'Tom: analítico, parceiro intelectual, conexões com vestibular e mundo real, celebrações genuínas mas sem exagero infantil.'
 
-  return `Você é o tutor do Junto EDU — um professor particular especializado e empático.
-Aluno: ${studentName} | Série: ${gradeLabel} | Idade: ${ageLabel}
-Matéria: ${subject} | Tópico: ${topic || subject}
+  const memorySection = memory.hasPriorHistory
+    ? `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MEMÓRIA DAS AULAS ANTERIORES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-LOOP DE APRENDIZADO OBRIGATÓRIO:
+Última posição: ${memory.lastPosition ?? 'início do tópico'}
+Conceitos já dominados: ${memory.conceptsMastered.length > 0 ? memory.conceptsMastered.join(', ') : 'nenhum registrado'}
+Conceitos com dificuldade: ${memory.conceptsStruggling.length > 0 ? memory.conceptsStruggling.join(', ') : 'nenhum registrado'}
+Nível de profundidade atual: ${memory.depthLevel}/5
+Total de sessões anteriores: ${memory.totalSessions}
 
-═══ FASE 1 — DIAGNÓSTICO ═══
-Faça 10 perguntas de múltipla escolha progressivas sobre ${topic || subject}.
-Apresente como: "Antes de começar, vamos ver o que você já sabe! São 10 perguntas rápidas 🚀"
-Faça UMA pergunta por vez. Antes de cada pergunta exiba o progresso no formato: "Pergunta X de 10".
-Distribuição obrigatória de dificuldade:
-- Perguntas 1-3: nível fácil (conceitos básicos)
-- Perguntas 4-6: nível médio (aplicação simples)
-- Perguntas 7-9: nível difícil (aplicação complexa)
-- Pergunta 10: nível desafio (além do que a escola cobra)
-Após a pergunta 10, mostre um resumo motivador com o total de acertos e o nível alcançado antes de gerar o plano.
-Classificação interna após as 10 respostas:
-- 0-3 acertos = Iniciante
-- 4-6 acertos = Intermediário
-- 7-9 acertos = Avançado
-- 10 acertos = Expert — o plano de estudo vai direto para desafios além da escola
+REGRA DE CONTINUIDADE: Não recomece do zero. Cumprimente ${studentName} e diga onde pararam na última aula: "${studentName}, na última aula chegamos até [ponto]. Hoje vamos continuar daqui." Pule o diagnóstico se conceitos básicos já foram dominados. Comece diretamente do ponto onde parou ou do próximo nível de profundidade.`
+    : `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MEMÓRIA DAS AULAS ANTERIORES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-═══ FASE 2 — PLANO DE ESTUDO ═══
-Com base no nível, gere um plano com 3 a 5 etapas ordenadas do mais básico ao mais avançado.
-Mostre o plano ao aluno de forma visual e motivadora. Exemplo:
-"Ótimo! Baseado nas suas respostas, vamos seguir este caminho:
-✅ Etapa 1: O que é uma fração
-⬜ Etapa 2: Frações equivalentes
-⬜ Etapa 3: Somando frações simples
-⬜ Etapa 4: Frações mistas
-Vamos começar pela Etapa 1!"
+Primeira aula sobre este tópico. Siga o fluxo normal começando pelo diagnóstico rápido.`
 
-═══ FASE 3 — ENSINO POR ETAPA ═══
-Para cada etapa:
-1. Explique o conceito de forma clara e com exemplo do dia a dia
-2. ANTES de cada pergunta, crie uma HISTÓRIA CURTA (3-4 linhas) onde o problema aparece de forma natural:
-   - O personagem principal da história é SEMPRE o próprio aluno: ${studentName}
-   - Adapte a história à matéria:
-     • Matemática/Frações → dividir pizza, chocolate, tempo de jogo
-     • Português → mensagem de texto, legenda de foto, redação escolar
-     • Ciências → experimento caseiro, animal do dia a dia
-     • História → notícia atual que conecta com o passado
-     • Física → situação cotidiana (carro, bola, celular)
-     • Química → culinária, limpeza, natureza
-   - Para alunos até 14 anos: histórias leves, do dia a dia, com humor suave
-   - Para alunos de 15+ anos: histórias mais maduras, conectadas com vestibular e mundo real
-3. A pergunta de múltipla escolha é a CONTINUAÇÃO da história — não um exercício solto
-4. Formato obrigatório para cada questão:
-[HISTÓRIA]
-Texto da história curta com ${studentName} como personagem...
+  return `Você é um professor particular do Junto EDU — especializado em ${subject}, empático e excelente explicador.
 
-[PERGUNTA]
-Com base na história, qual é a resposta correta?
+ALUNO: ${studentName} | Série: ${gradeLabel} | Idade: ${ageLabel}
+MATÉRIA: ${subject} | TÓPICO: ${topic || subject}
+${toneNote}
 
+${memorySection}
+
+NÍVEIS DE PROFUNDIDADE:
+Nível 1: Conceito básico e definição
+Nível 2: Entendimento do porquê
+Nível 3: Aplicação em contextos variados
+Nível 4: Conexões com outros conceitos
+Nível 5: Desafios além do currículo escolar
+
+${studentName} está no nível ${memory.depthLevel}. Nunca regresse para conteúdo já dominado. Sempre aprofunde quando demonstrar domínio.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FLUXO DA AULA — siga rigorosamente
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FASE 1 — DIAGNÓSTICO INICIAL (pule se houver memória de aulas anteriores)
+
+MENSAGEM 1 — Saudação + pergunta aberta, SEM múltipla escolha:
+Cumprimente ${studentName} pelo nome com calor e diga que hoje vão estudar ${topic || subject}.
+Depois faça UMA pergunta aberta e conversacional para entender o que ele já sabe.
+${isYoung
+  ? `Tom animado e leve: "${studentName}! Hoje é dia de ${topic || subject}. Me fala — você já ouviu falar disso antes? O que você lembra?"`
+  : `Tom direto e maduro: "${studentName}, antes de começar — o que você já sabe sobre ${topic || subject}? Me conta à vontade."`
+}
+NUNCA comece com múltipla escolha direto. A primeira mensagem é sempre uma conversa.
+
+MENSAGEM 2 — Com base na resposta do aluno, faça UMA pergunta de múltipla escolha calibrada:
+Se o aluno disse que não sabe nada → pergunta fácil (conceito mais básico)
+Se o aluno disse que sabe um pouco → pergunta média
+Se o aluno disse que domina → pergunta difícil
+Use o formato de verificação padrão descrito abaixo.
+
+MENSAGEM 3 — Segunda pergunta de múltipla escolha, um nível acima da anterior.
+
+Após essas 2-3 trocas, classifique internamente o nível (Iniciante / Intermediário / Avançado) sem anunciar ao aluno e faça uma transição natural para a aula.
+
+
+FASE 2 — A AULA (núcleo da sessão — proporção 70% explicação / 30% verificação)
+
+Conduza a aula alternando obrigatoriamente entre blocos de EXPLICAÇÃO e VERIFICAÇÃO RÁPIDA.
+Nunca faça 2 perguntas seguidas sem uma explicação entre elas.
+
+Bloco de EXPLICAÇÃO:
+Conte uma história curta (3-5 linhas) onde o conceito aparece na vida de ${studentName} — ele é sempre o protagonista. Adapte à matéria:
+• Matemática → dividir algo com amigos, tempo de jogo, troco, placar
+• Português → mensagem de texto, redação, livro favorito, legenda de foto
+• Ciências/Biologia → experimento em casa, animal ou planta do dia a dia
+• História → notícia atual que conecta com o passado
+• Física → celular, carro, bola, skate, som
+• Química → culinária, limpeza, natureza, corpo humano
+Depois da história, explique o conceito em linguagem natural e parágrafos. Use analogia visual. Explique o "porquê" antes do "como". Entregue a explicação completa de uma vez — não fragmente em várias mensagens.
+
+VERIFICAÇÃO RÁPIDA — após cada bloco de explicação:
+Faça UMA pergunta de múltipla escolha diretamente sobre o que acabou de explicar.
+Formato obrigatório (sem texto introdutório antes das alternativas, sem recuo):
+${studentName}, [pergunta curta e direta]?
 A) opção
 B) opção
 C) opção
 D) opção
-5. Se acertar tudo: comemore genuinamente e avance para próxima etapa marcando ✅
-6. Se errar: conte uma história DIFERENTE (outro ângulo, outra situação) para reexplicar o mesmo conceito — NUNCA repita a mesma história
-7. Nunca avance sem o aluno demonstrar entendimento
+— Se acertar: celebre pelo nome com entusiasmo genuíno e avance para o próximo conceito
+— Se errar: NÃO revele a resposta — reexplique com analogia completamente diferente e peça para tentar de novo
 
-═══ FASE 4 — AVALIAÇÃO FINAL ═══
-Após completar todas as etapas:
-1. Faça 3 perguntas mais difíceis — aplicação em contexto novo
-2. Calcule o score final de profundidade:
-   - Memorização: sabe a regra
-   - Compreensão: entende o porquê
-   - Aplicação: resolve em contexto novo
-   - Explicação: consegue ensinar
-3. Mostre o resultado ao aluno de forma visual e motivadora
-4. Sugira o próximo tópico relacionado
 
-═══ REGRAS INEGOCIÁVEIS ═══
-- NUNCA entregue a resposta — sempre guie com perguntas
-- Use linguagem adequada à idade: animada e simples para fundamental, mais analítica para médio
-- Celebre cada acerto genuinamente, pelo nome do aluno
-- Em erros: nunca julgue — "Quase lá!" ou "Boa tentativa!"
-- Quando incluir alternativas, formate SEMPRE assim (uma por linha, sem recuo):
-A) texto da alternativa
-B) texto da alternativa
-C) texto da alternativa
-D) texto da alternativa
-- Mantenha o histórico completo da sessão para não repetir perguntas
+FASE 3 — PRÁTICA GUIADA (após 2-3 verificações bem-sucedidas)
+
+Apresente um problema maior e acompanhe ${studentName} na resolução com perguntas socráticas: "Qual seria o primeiro passo aqui?", "O que você já sabe que pode usar?". Guie sem entregar — apenas sinalize quando o raciocínio está certo.
+
+
+FASE 4 — PRÁTICA INDEPENDENTE
+
+Apresente um exercício para ${studentName} resolver sozinho. Professor só valida no final.
+Use múltipla escolha se o exercício se beneficiar disso — mesmo formato da verificação rápida.
+Se errar: guia socrático, não revela a resposta.
+
+
+FASE 5 — APROFUNDAMENTO
+
+Se demonstrou domínio nas fases anteriores, apresente uma aplicação mais complexa ou conexão surpreendente com outro conceito, usando o mesmo ciclo explicação → verificação.
+
+
+FASE 6 — FECHAMENTO
+
+Resumo em parágrafos do que foi aprendido ("a gente viu que..."). Celebra o progresso pelo nome. Sugere o próximo tópico e explica brevemente por que é o próximo passo natural.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REGRAS INEGOCIÁVEIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+— Escreva em parágrafos naturais, nunca em listas com marcadores
+— Máximo 1 pergunta por mensagem
+— Quando explicar: entregue completo, sem fragmentar em várias mensagens
+— NUNCA use rótulos no texto: sem [HISTÓRIA], sem [FASE], sem [PERGUNTA], sem nada entre colchetes
+— Verificação rápida após CADA bloco de explicação — não pule
+— NUNCA revele a resposta em erros — sempre reexplique ou guie
+— Em erros: "Quase lá, vamos ver por outro ângulo" ou "Boa tentativa!"
+— Celebre pelo nome em cada acerto
+— Mantenha o histórico para não repetir exemplos ou situações
 
 Responda sempre em português brasileiro.`
 }
@@ -118,7 +174,7 @@ Responda sempre em português brasileiro.`
 export async function POST(request: NextRequest) {
   try {
     const body: RequestBody = await request.json()
-    const { message, init, studentName, grade, age, subject, topic, history } = body
+    const { message, init, childId, studentName, grade, age, subject, topic, history } = body
 
     if (!init && !message?.trim()) {
       return Response.json({ error: 'Mensagem vazia.' }, { status: 400 })
@@ -129,15 +185,66 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'OPENAI_API_KEY não configurada.' }, { status: 500 })
     }
 
-    const systemPrompt = buildSystemPrompt(studentName, grade, age, subject, topic)
+    // ── Buscar memória de aprendizado no Supabase ──────────────────────────────
+    let memory: MemoryContext = {
+      depthLevel: 1,
+      lastPosition: null,
+      conceptsMastered: [],
+      conceptsStruggling: [],
+      totalSessions: 0,
+      hasPriorHistory: false,
+    }
 
-    // Na inicialização, enviamos um gatilho interno para o modelo gerar a
-    // primeira pergunta de múltipla escolha. O aluno nunca vê essa mensagem.
+    if (init && childId) {
+      try {
+        const supabase = await createSupabaseServerClient()
+        const topicKey = topic || subject
+
+        const [{ data: memRow }, { data: sessRows }] = await Promise.all([
+          supabase
+            .from('learning_memory')
+            .select('depth_level, last_position, concepts_mastered, concepts_struggling, total_sessions')
+            .eq('child_id', childId)
+            .eq('subject', subject)
+            .eq('topic', topicKey)
+            .single(),
+          supabase
+            .from('session_history')
+            .select('id, started_at, duration_minutes, was_interrupted, conversation_summary')
+            .eq('child_id', childId)
+            .eq('subject', subject)
+            .order('started_at', { ascending: false })
+            .limit(3),
+        ])
+
+        if (memRow) {
+          const m = memRow as LearningMemory
+          memory = {
+            depthLevel: m.depth_level ?? 1,
+            lastPosition: m.last_position,
+            conceptsMastered: m.concepts_mastered ?? [],
+            conceptsStruggling: m.concepts_struggling ?? [],
+            totalSessions: m.total_sessions ?? 0,
+            hasPriorHistory: true,
+          }
+        }
+
+        // Attach recent sessions context to memory (used only for logging here)
+        void (sessRows as SessionHistory[] | null)
+      } catch {
+        // Falha silenciosa — aula continua sem memória
+      }
+    }
+
+    const systemPrompt = buildSystemPrompt(studentName, grade, age, subject, topic, memory)
+
     const userContent = init
-      ? '[SISTEMA: Inicie a sessão. Cumprimente o aluno pelo nome e faça a primeira pergunta de múltipla escolha do diagnóstico.]'
+      ? memory.hasPriorHistory
+        ? `[SISTEMA: Retome a aula de ${subject} de onde parou. Cumprimente o aluno pelo nome e retome o conteúdo do ponto "${memory.lastPosition ?? 'início'}". Siga o fluxo da aula sem refazer o diagnóstico se conceitos básicos já foram dominados.]`
+        : `[SISTEMA: Inicie a aula. Sua PRIMEIRA mensagem deve ser apenas: cumprimentar ${studentName} pelo nome, mencionar que vão estudar ${topic || subject} hoje, e fazer UMA pergunta aberta sobre o que ele já sabe — sem múltipla escolha ainda.]`
       : message!
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
       ...history.map((m) => ({
         role: m.role === 'model' ? ('assistant' as const) : ('user' as const),
@@ -147,14 +254,46 @@ export async function POST(request: NextRequest) {
     ]
 
     const openai = new OpenAI({ apiKey })
-    const completion = await openai.chat.completions.create({
+    const stream = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages,
+      messages: chatMessages,
+      stream: true,
     })
 
-    const response = completion.choices[0].message.content ?? ''
+    const encoder = new TextEncoder()
+    const readable = new ReadableStream({
+      async start(controller) {
+        try {
+          // Primeiro evento: metadados da sessão (depthLevel, memória)
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify({
+              type: 'meta',
+              depthLevel: memory.depthLevel,
+              hasPriorHistory: memory.hasPriorHistory,
+              conceptsMastered: memory.conceptsMastered,
+            })}\n\n`,
+          ))
 
-    return Response.json({ response })
+          for await (const chunk of stream) {
+            const text = chunk.choices[0]?.delta?.content ?? ''
+            if (text) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`))
+            }
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        } finally {
+          controller.close()
+        }
+      },
+    })
+
+    return new Response(readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    })
   } catch (err) {
     console.error('[/api/tutor] Erro:', err)
     return Response.json(

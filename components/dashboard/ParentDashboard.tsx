@@ -1,14 +1,25 @@
 import Link from 'next/link'
 import { Card } from '@/components/ui/Card'
 import { AddChildModal } from '@/components/dashboard/AddChildModal'
-import type { ParentProfile, Child } from '@/types'
+import type { ParentProfile, Child, SessionHistory } from '@/types'
 
 interface Props {
   parent: ParentProfile
   children: Child[]
+  recentSessions: SessionHistory[]
 }
 
-export function ParentDashboard({ parent, children }: Props) {
+function formatDuration(minutes: number | null): string {
+  if (!minutes) return '< 1 min'
+  if (minutes < 60) return `${minutes} min`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}min`
+}
+
+function depthLabel(level: number): string {
+  return ['', 'Básico', 'Intermediário', 'Avançado', 'Aprofundado', 'Expert'][level] ?? `Nível ${level}`
+}
+
+export function ParentDashboard({ parent, children, recentSessions }: Props) {
   const firstName = parent.name.split(' ')[0]
 
   return (
@@ -52,14 +63,65 @@ export function ParentDashboard({ parent, children }: Props) {
         <AddChildModal tenantId={parent.tenant_id} />
       </section>
 
-      {/* Empty state for activity */}
+      {/* Últimas aulas */}
       <section>
-        <h2 className="text-base font-semibold text-gray-700 mb-3">Atividade recente</h2>
-        <Card padding="sm">
-          <p className="py-6 text-center text-sm text-gray-400">
-            As sessões de tutoria aparecerão aqui.
-          </p>
-        </Card>
+        <h2 className="text-base font-semibold text-gray-700 mb-3">Últimas aulas</h2>
+        {recentSessions.length === 0 ? (
+          <Card padding="sm">
+            <p className="py-6 text-center text-sm text-gray-400">
+              As sessões de tutoria aparecerão aqui após a primeira aula.
+            </p>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {recentSessions.map((session) => {
+              const child = children.find((c) => c.id === session.child_id)
+              return (
+                <Card key={session.id} padding="sm">
+                  <div className="flex items-start gap-3">
+                    {/* Avatar do filho */}
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1D9E75]/10 text-sm font-bold text-[#1D9E75]">
+                      {child?.name[0] ?? '?'}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold text-gray-900 truncate">
+                          {session.subject}
+                          {session.topic && session.topic !== session.subject && (
+                            <span className="font-normal text-gray-500"> · {session.topic}</span>
+                          )}
+                        </span>
+                        {session.was_interrupted && (
+                          <span title="Aula interrompida" className="flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-500">
+                            ⚠ interrompida
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-0.5 flex items-center gap-3 text-xs text-gray-400">
+                        {child && <span>{child.name}</span>}
+                        <span>{formatDuration(session.duration_minutes)}</span>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-500">
+                          {depthLabel(session.depth_reached)}
+                        </span>
+                        <span>
+                          {new Date(session.started_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                        </span>
+                      </div>
+
+                      {session.conversation_summary && (
+                        <p className="mt-1.5 text-xs text-gray-500 leading-relaxed line-clamp-2">
+                          {session.conversation_summary}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        )}
       </section>
     </div>
   )

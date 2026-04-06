@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { ParentDashboard } from '@/components/dashboard/ParentDashboard'
-import type { ParentProfile, Child } from '@/types'
+import type { ParentProfile, Child, SessionHistory } from '@/types'
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient()
@@ -36,6 +36,19 @@ export default async function DashboardPage() {
   // 4. Sem filhos = onboarding incompleto
   if (children.length === 0) redirect('/onboarding')
 
+  // 5. Últimas aulas (sessões finalizadas)
+  const { data: sessionRows } = children.length > 0
+    ? await supabase
+        .from('session_history')
+        .select('id, child_id, subject, topic, started_at, duration_minutes, was_interrupted, depth_reached, conversation_summary')
+        .in('child_id', children.map((c) => c.id))
+        .not('ended_at', 'is', null)
+        .order('started_at', { ascending: false })
+        .limit(10)
+    : { data: [] }
+
+  const recentSessions = (sessionRows ?? []) as SessionHistory[]
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top nav */}
@@ -62,7 +75,7 @@ export default async function DashboardPage() {
       </header>
 
       <main className="mx-auto max-w-3xl px-4 py-8">
-        <ParentDashboard parent={parent} children={children as Child[]} />
+        <ParentDashboard parent={parent} children={children as Child[]} recentSessions={recentSessions} />
       </main>
     </div>
   )
