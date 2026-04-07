@@ -136,7 +136,7 @@ export function TutorChat({ child }: Props) {
   const [started, setStarted] = useState(false)
 
   // Apostila
-  const [photos, setPhotos] = useState<string[]>([])
+  const [photos, setPhotos] = useState<{ preview: string; base64: string }[]>([])
   const [apostilaAnalysis, setApostilaAnalysis] = useState<ApostilaAnalysis | null>(null)
   const [analyzingApostila, setAnalyzingApostila] = useState(false)
   const [apostilaError, setApostilaError] = useState<string | null>(null)
@@ -612,7 +612,7 @@ export function TutorChat({ child }: Props) {
             topic: apostilaAnalysis.topic,
             exercises: apostilaAnalysis.exercises,
           },
-          apostila_images: photos,
+          apostila_images: photos.map((p) => p.base64),
         } : {}),
       },
       0,
@@ -699,21 +699,46 @@ export function TutorChat({ child }: Props) {
 
   // ─── Apostila ─────────────────────────────────────────────────────────────
 
-  function fileToBase64(file: File): Promise<string> {
+  /**
+   * Converte File para base64 puro (sem prefixo data URL).
+   * Usamos canvas para normalizar para JPEG independente do formato original
+   * (iOS captura em HEIC/HEIF, Android pode usar WebP — ambos quebram OpenAI SDK).
+   */
+  function fileToBase64(file: File): Promise<{ preview: string; base64: string }> {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = reject
-      reader.readAsDataURL(file)
+      const img = new Image()
+      const objectUrl = URL.createObjectURL(file)
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl)
+        const canvas = document.createElement('canvas')
+        // Redimensiona para máx 1200px mantendo proporção (reduz payload)
+        const MAX = 1200
+        const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
+        canvas.width = Math.round(img.width * ratio)
+        canvas.height = Math.round(img.height * ratio)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { reject(new Error('Canvas não disponível')); return }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+        const base64 = dataUrl.split(',')[1] ?? ''
+        resolve({ preview: dataUrl, base64 })
+      }
+      img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Imagem inválida')) }
+      img.src = objectUrl
     })
   }
 
   async function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
     if (!files.length) return
-    const newPhotos = await Promise.all(files.map(fileToBase64))
-    setPhotos((prev) => [...prev, ...newPhotos].slice(0, 5))
-    e.target.value = '' // reset para permitir capturar a mesma imagem novamente
+    try {
+      const results = await Promise.all(files.map(fileToBase64))
+      // photos guarda { preview, base64 } — preview para miniatura, base64 para API
+      setPhotos((prev) => [...prev, ...results].slice(0, 5))
+    } catch {
+      setApostilaError('Não foi possível processar a imagem. Tente novamente.')
+    }
+    e.target.value = ''
   }
 
   async function handleAnalyzeApostila() {
@@ -724,18 +749,22 @@ export function TutorChat({ child }: Props) {
       const res = await fetch('/api/apostila', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ images: photos }),
+        // Envia apenas o base64 puro — sem prefixo data URL
+        body: JSON.stringify({ images: photos.map((p) => p.base64) }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Erro na análise.')
       setApostilaAnalysis(data as ApostilaAnalysis)
-      // Pré-preenche matéria e tópico do select para casos onde o pai retoma
       const matched = materias.find((m) => m.label.toLowerCase() === data.subject.toLowerCase())
       setSubjectValue(matched?.value ?? '')
       setSubject(data.subject)
       setTopic(data.topic)
     } catch (err) {
-      setApostilaError(err instanceof Error ? err.message : 'Não consegui analisar. Tente uma foto mais nítida.')
+      setApostilaError(
+        err instanceof Error
+          ? err.message
+          : 'Não consegui analisar. Tente uma foto mais nítida ou com melhor iluminação.',
+      )
     } finally {
       setAnalyzingApostila(false)
     }
@@ -824,7 +853,7 @@ export function TutorChat({ child }: Props) {
                     {photos.map((photo, i) => (
                       <div key={i} className="relative aspect-[3/4] rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={photo} alt={`Página ${i + 1}`} className="w-full h-full object-cover" />
+                        <img src={photo.preview} alt={`Página ${i + 1}`} className="w-full h-full object-cover" />
                         <button
                           type="button"
                           onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))}

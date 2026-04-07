@@ -23,12 +23,24 @@ export async function POST(request: NextRequest) {
 
     const openai = new OpenAI({ apiKey })
 
+    // Normaliza cada imagem para data:image/jpeg;base64,{base64}
+    // Aceita base64 puro (sem prefixo) ou data URL completo
+    function toJpegDataUrl(image: string): string {
+      if (image.startsWith('data:image/')) {
+        // Já é data URL — reescreve o MIME como jpeg para evitar rejeição do SDK
+        const base64Part = image.includes(',') ? image.split(',')[1] : image
+        return `data:image/jpeg;base64,${base64Part}`
+      }
+      // Base64 puro sem prefixo
+      return `data:image/jpeg;base64,${image}`
+    }
+
     // Monta array de conteúdo: texto + imagens (max 5)
     const imageContent: OpenAI.Chat.ChatCompletionContentPart[] = images
       .slice(0, 5)
-      .map((dataUrl) => ({
+      .map((img) => ({
         type: 'image_url' as const,
-        image_url: { url: dataUrl, detail: 'low' as const },
+        image_url: { url: toJpegDataUrl(img), detail: 'low' as const },
       }))
 
     const res = await openai.chat.completions.create({

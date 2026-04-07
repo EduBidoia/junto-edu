@@ -265,6 +265,15 @@ export async function POST(request: NextRequest) {
         : `[SISTEMA: Inicie a aula. Sua PRIMEIRA mensagem deve ser apenas: cumprimentar ${studentName} pelo nome, mencionar que vão estudar ${topic || subject} hoje, e fazer UMA pergunta aberta sobre o que ele já sabe — sem múltipla escolha ainda.]`
       : message!
 
+    // Normaliza base64 para data URL jpeg (aceita com ou sem prefixo)
+    function toJpegDataUrl(image: string): string {
+      if (image.startsWith('data:image/')) {
+        const base64Part = image.includes(',') ? image.split(',')[1] : image
+        return `data:image/jpeg;base64,${base64Part}`
+      }
+      return `data:image/jpeg;base64,${image}`
+    }
+
     // Monta conteúdo da mensagem do usuário — com imagens da apostila no init
     const userMessageContent: OpenAI.Chat.ChatCompletionContentPart[] =
       init && apostila_images && apostila_images.length > 0
@@ -272,7 +281,7 @@ export async function POST(request: NextRequest) {
             { type: 'text', text: userContent },
             ...apostila_images.slice(0, 5).map((url) => ({
               type: 'image_url' as const,
-              image_url: { url, detail: 'low' as const },
+              image_url: { url: toJpegDataUrl(url), detail: 'low' as const },
             })),
           ]
         : [{ type: 'text', text: userContent }]
