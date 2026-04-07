@@ -8,6 +8,12 @@ interface HistoryMessage {
   parts: [{ text: string }]
 }
 
+interface ApostilaContext {
+  subject: string
+  topic: string
+  exercises: string[]
+}
+
 interface RequestBody {
   message?: string
   init?: boolean
@@ -18,6 +24,8 @@ interface RequestBody {
   subject: string
   topic: string
   history: HistoryMessage[]
+  apostila_context?: ApostilaContext
+  apostila_images?: string[]
 }
 
 interface MemoryContext {
@@ -36,6 +44,7 @@ function buildSystemPrompt(
   subject: string,
   topic: string,
   memory: MemoryContext,
+  apostila?: ApostilaContext,
 ): string {
   const gradeLabel = grade ?? 'não informada'
   const ageLabel = age ? `${age} anos` : 'não informada'
@@ -168,13 +177,25 @@ REGRAS INEGOCIÁVEIS
 — Celebre pelo nome em cada acerto
 — Mantenha o histórico para não repetir exemplos ou situações
 
-Responda sempre em português brasileiro.`
+Responda sempre em português brasileiro.${apostila ? `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONTEXTO DA APOSTILA DO ALUNO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Matéria: ${apostila.subject} | Tópico: ${apostila.topic}
+${apostila.exercises.length > 0 ? `Exercícios da apostila:
+${apostila.exercises.map((e, i) => `${i + 1}. ${e}`).join('\n')}` : ''}
+
+A aula deve ser baseada nesse conteúdo específico.
+Use os exercícios da apostila como base — não invente outros.
+O aluno trouxe a apostila dele: respeite o material da escola.` : ''}`
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: RequestBody = await request.json()
-    const { message, init, childId, studentName, grade, age, subject, topic, history } = body
+    const { message, init, childId, studentName, grade, age, subject, topic, history, apostila_context, apostila_images } = body
 
     if (!init && !message?.trim()) {
       return Response.json({ error: 'Mensagem vazia.' }, { status: 400 })
@@ -236,7 +257,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const systemPrompt = buildSystemPrompt(studentName, grade, age, subject, topic, memory)
+    const systemPrompt = buildSystemPrompt(studentName, grade, age, subject, topic, memory, apostila_context)
 
     const userContent = init
       ? memory.hasPriorHistory
@@ -244,18 +265,31 @@ export async function POST(request: NextRequest) {
         : `[SISTEMA: Inicie a aula. Sua PRIMEIRA mensagem deve ser apenas: cumprimentar ${studentName} pelo nome, mencionar que vão estudar ${topic || subject} hoje, e fazer UMA pergunta aberta sobre o que ele já sabe — sem múltipla escolha ainda.]`
       : message!
 
+    // Monta conteúdo da mensagem do usuário — com imagens da apostila no init
+    const userMessageContent: OpenAI.Chat.ChatCompletionContentPart[] =
+      init && apostila_images && apostila_images.length > 0
+        ? [
+            { type: 'text', text: userContent },
+            ...apostila_images.slice(0, 5).map((url) => ({
+              type: 'image_url' as const,
+              image_url: { url, detail: 'low' as const },
+            })),
+          ]
+        : [{ type: 'text', text: userContent }]
+
     const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
       ...history.map((m) => ({
         role: m.role === 'model' ? ('assistant' as const) : ('user' as const),
         content: m.parts[0].text,
       })),
-      { role: 'user', content: userContent },
+      { role: 'user', content: userMessageContent },
     ]
 
     const openai = new OpenAI({ apiKey })
+    const hasImages = init && apostila_images && apostila_images.length > 0
     const stream = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: hasImages ? 'gpt-4o' : 'gpt-4o-mini',
       messages: chatMessages,
       stream: true,
     })

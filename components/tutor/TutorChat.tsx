@@ -117,14 +117,29 @@ interface Props {
   child: Child
 }
 
+interface ApostilaAnalysis {
+  subject: string
+  topic: string
+  exercises: string[]
+  level: string
+}
+
 export function TutorChat({ child }: Props) {
   const materias = getMateriasPorSerie(child.grade)
 
   // Setup
+  type SetupMode = 'choose' | 'photo' | 'manual'
+  const [setupMode, setSetupMode] = useState<SetupMode>('choose')
   const [subjectValue, setSubjectValue] = useState('')
   const [subject, setSubject] = useState('')
   const [topic, setTopic] = useState('')
   const [started, setStarted] = useState(false)
+
+  // Apostila
+  const [photos, setPhotos] = useState<string[]>([])
+  const [apostilaAnalysis, setApostilaAnalysis] = useState<ApostilaAnalysis | null>(null)
+  const [analyzingApostila, setAnalyzingApostila] = useState(false)
+  const [apostilaError, setApostilaError] = useState<string | null>(null)
 
   // Sessão
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -170,6 +185,7 @@ export function TutorChat({ child }: Props) {
   // Cache de frases curtas comuns (blob reutilizável)
   const audioCacheRef = useRef<Map<string, Blob>>(new Map())
   const recognitionRef = useRef<ISpeechRecognition | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -559,9 +575,9 @@ export function TutorChat({ child }: Props) {
     )
   }
 
-  async function handleStart(e: React.FormEvent) {
-    e.preventDefault()
-    if (!subjectValue) return
+  async function handleStart(e?: React.FormEvent) {
+    if (e) e.preventDefault()
+    if (!subject) return
     setStarted(true)
     setMessages([{ role: 'model', text: '' }])
 
@@ -581,7 +597,24 @@ export function TutorChat({ child }: Props) {
     // Pré-aquece cache de frases comuns em background
     prefetchCommonPhrases()
     await callTutor(
-      { init: true, childId: child.id, studentName: child.name, grade: child.grade, age: child.age, subject, topic, history: [] },
+      {
+        init: true,
+        childId: child.id,
+        studentName: child.name,
+        grade: child.grade,
+        age: child.age,
+        subject,
+        topic,
+        history: [],
+        ...(apostilaAnalysis ? {
+          apostila_context: {
+            subject: apostilaAnalysis.subject,
+            topic: apostilaAnalysis.topic,
+            exercises: apostilaAnalysis.exercises,
+          },
+          apostila_images: photos,
+        } : {}),
+      },
       0,
     )
   }
@@ -664,6 +697,50 @@ export function TutorChat({ child }: Props) {
     setIsRecording(true)
   }
 
+  // ─── Apostila ─────────────────────────────────────────────────────────────
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
+
+  async function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    if (!files.length) return
+    const newPhotos = await Promise.all(files.map(fileToBase64))
+    setPhotos((prev) => [...prev, ...newPhotos].slice(0, 5))
+    e.target.value = '' // reset para permitir capturar a mesma imagem novamente
+  }
+
+  async function handleAnalyzeApostila() {
+    if (!photos.length) return
+    setAnalyzingApostila(true)
+    setApostilaError(null)
+    try {
+      const res = await fetch('/api/apostila', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images: photos }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Erro na análise.')
+      setApostilaAnalysis(data as ApostilaAnalysis)
+      // Pré-preenche matéria e tópico do select para casos onde o pai retoma
+      const matched = materias.find((m) => m.label.toLowerCase() === data.subject.toLowerCase())
+      setSubjectValue(matched?.value ?? '')
+      setSubject(data.subject)
+      setTopic(data.topic)
+    } catch (err) {
+      setApostilaError(err instanceof Error ? err.message : 'Não consegui analisar. Tente uma foto mais nítida.')
+    } finally {
+      setAnalyzingApostila(false)
+    }
+  }
+
   function handleSubjectChange(value: string) {
     setSubjectValue(value)
     setSubject(materias.find((m) => m.value === value)?.label ?? value)
@@ -674,8 +751,18 @@ export function TutorChat({ child }: Props) {
 
   if (!started) {
     return (
-      <div className="flex flex-1 items-center justify-center p-6">
-        <form onSubmit={handleStart} className="w-full max-w-sm flex flex-col gap-5">
+      <div className="flex flex-1 items-center justify-center p-6 overflow-y-auto">
+        {/* Input de câmera — oculto, ativado por botão */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={handlePhotoCapture}
+        />
+
+        <div className="w-full max-w-sm flex flex-col gap-5">
           <div className="text-center">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1D9E75]/10">
               <span className="text-2xl">📚</span>
@@ -684,55 +771,228 @@ export function TutorChat({ child }: Props) {
             <p className="mt-1 text-sm text-gray-500">Para {child.name}</p>
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-gray-700">Matéria *</label>
-            <select
-              value={subjectValue}
-              onChange={(e) => handleSubjectChange(e.target.value)}
-              required
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
-            >
-              <option value="">Selecione a matéria</option>
-              {materias.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
-          </div>
+          {/* ── Modo escolha ── */}
+          {setupMode === 'choose' && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setSetupMode('photo'); fileInputRef.current?.click() }}
+                className="flex items-center gap-3 rounded-2xl border-2 border-[#1D9E75]/30 bg-[#1D9E75]/5 px-5 py-4 text-left transition-all hover:border-[#1D9E75]/60 hover:bg-[#1D9E75]/10"
+              >
+                <span className="text-3xl">📷</span>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Fotografar apostila</p>
+                  <p className="text-xs text-gray-500 mt-0.5">O tutor analisa e adapta a aula ao seu material</p>
+                </div>
+              </button>
 
-          {subjectValue && (
-            <div className="flex flex-col gap-1">
-              <label className="text-sm font-medium text-gray-700">
-                Tópico <span className="font-normal text-gray-400">(opcional)</span>
-              </label>
-              {TOPICOS[subjectValue] ? (
-                <select
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
-                >
-                  <option value="">Selecione o tópico</option>
-                  {TOPICOS[subjectValue].map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  placeholder="Ex: Digite o tópico…"
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
-                />
-              )}
-            </div>
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-gray-200" />
+                <span className="text-xs text-gray-400">ou</span>
+                <div className="h-px flex-1 bg-gray-200" />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSetupMode('manual')}
+                className="text-sm text-[#1D9E75] hover:underline text-center"
+              >
+                Selecionar a matéria manualmente
+              </button>
+            </>
           )}
 
-          <button
-            type="submit"
-            className="flex h-11 w-full items-center justify-center rounded-lg bg-[#1D9E75] text-sm font-semibold text-white transition-colors hover:bg-[#178a64]"
-          >
-            Iniciar sessão →
-          </button>
-        </form>
+          {/* ── Modo foto ── */}
+          {setupMode === 'photo' && !apostilaAnalysis && (
+            <>
+              {photos.length === 0 ? (
+                <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-gray-200 py-10 px-4">
+                  <span className="text-4xl">📄</span>
+                  <p className="text-sm text-gray-500 text-center">Aponte a câmera para a página da apostila</p>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="mt-1 flex items-center gap-2 rounded-lg bg-[#1D9E75] px-4 py-2 text-sm font-semibold text-white hover:bg-[#178a64] transition-colors"
+                  >
+                    <span>📷</span> Tirar foto
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Miniaturas */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {photos.map((photo, i) => (
+                      <div key={i} className="relative aspect-[3/4] rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={photo} alt={`Página ${i + 1}`} className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))}
+                          className="absolute top-1 right-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white text-[10px] hover:bg-black/80"
+                        >
+                          ✕
+                        </button>
+                        <span className="absolute bottom-1 left-1 rounded-full bg-black/50 px-1.5 py-0.5 text-[10px] text-white">
+                          {i + 1}
+                        </span>
+                      </div>
+                    ))}
+                    {photos.length < 5 && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="aspect-[3/4] flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-[#1D9E75]/50 hover:text-[#1D9E75] transition-colors"
+                      >
+                        <span className="text-xl">+</span>
+                        <span className="text-[10px] mt-1">Mais foto</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-center text-xs text-gray-400">{photos.length}/5 página{photos.length !== 1 ? 's' : ''}</p>
+
+                  {apostilaError && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{apostilaError}</p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleAnalyzeApostila}
+                    disabled={analyzingApostila}
+                    className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#1D9E75] text-sm font-semibold text-white transition-colors hover:bg-[#178a64] disabled:opacity-60"
+                  >
+                    {analyzingApostila ? (
+                      <>
+                        <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                        Analisando apostila…
+                      </>
+                    ) : (
+                      '🔍 Analisar apostila'
+                    )}
+                  </button>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => { setSetupMode('choose'); setPhotos([]); setApostilaError(null) }}
+                className="text-xs text-gray-400 hover:text-gray-600 text-center"
+              >
+                ← Voltar
+              </button>
+            </>
+          )}
+
+          {/* ── Resultado da análise ── */}
+          {setupMode === 'photo' && apostilaAnalysis && (
+            <>
+              <div className="rounded-2xl border border-[#1D9E75]/30 bg-[#1D9E75]/5 p-4 flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <span className="text-xl mt-0.5">✅</span>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">
+                      {apostilaAnalysis.subject} — {apostilaAnalysis.topic}
+                    </p>
+                    {apostilaAnalysis.level && (
+                      <p className="text-xs text-gray-500 mt-0.5 capitalize">{apostilaAnalysis.level}</p>
+                    )}
+                  </div>
+                </div>
+
+                {apostilaAnalysis.exercises.length > 0 && (
+                  <div className="border-t border-[#1D9E75]/20 pt-3">
+                    <p className="text-xs font-medium text-gray-600 mb-2">Exercícios identificados:</p>
+                    <ol className="flex flex-col gap-1">
+                      {apostilaAnalysis.exercises.map((ex, i) => (
+                        <li key={i} className="text-xs text-gray-600 flex gap-2">
+                          <span className="text-[#1D9E75] font-bold shrink-0">{i + 1}.</span>
+                          {ex}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleStart()}
+                className="flex h-11 w-full items-center justify-center rounded-lg bg-[#1D9E75] text-sm font-semibold text-white transition-colors hover:bg-[#178a64]"
+              >
+                Iniciar aula sobre isso →
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setApostilaAnalysis(null); setSetupMode('manual') }}
+                className="text-xs text-gray-400 hover:text-gray-600 text-center"
+              >
+                Não está certo? Selecionar manualmente
+              </button>
+            </>
+          )}
+
+          {/* ── Modo manual ── */}
+          {setupMode === 'manual' && (
+            <form onSubmit={handleStart} className="flex flex-col gap-5">
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium text-gray-700">Matéria *</label>
+                <select
+                  value={subjectValue}
+                  onChange={(e) => handleSubjectChange(e.target.value)}
+                  required
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
+                >
+                  <option value="">Selecione a matéria</option>
+                  {materias.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {subjectValue && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-medium text-gray-700">
+                    Tópico <span className="font-normal text-gray-400">(opcional)</span>
+                  </label>
+                  {TOPICOS[subjectValue] ? (
+                    <select
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
+                    >
+                      <option value="">Selecione o tópico</option>
+                      {TOPICOS[subjectValue].map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                      placeholder="Ex: Digite o tópico…"
+                      className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
+                    />
+                  )}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="flex h-11 w-full items-center justify-center rounded-lg bg-[#1D9E75] text-sm font-semibold text-white transition-colors hover:bg-[#178a64]"
+              >
+                Iniciar sessão →
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSetupMode('choose')}
+                className="text-xs text-gray-400 hover:text-gray-600 text-center"
+              >
+                ← Voltar
+              </button>
+            </form>
+          )}
+        </div>
       </div>
     )
   }
