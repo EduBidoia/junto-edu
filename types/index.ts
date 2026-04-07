@@ -32,6 +32,7 @@ export interface Child {
   name: string
   grade: string | null
   age: number | null
+  access_token?: string
   created_at: string
 }
 

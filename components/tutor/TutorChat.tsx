@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { MATERIAS, TOPICOS } from '@/lib/materias'
+import { getMateriasPorSerie, TOPICOS } from '@/lib/materias'
 import { supabase } from '@/lib/supabase'
 import type { Child } from '@/types'
 
@@ -118,6 +118,8 @@ interface Props {
 }
 
 export function TutorChat({ child }: Props) {
+  const materias = getMateriasPorSerie(child.grade)
+
   // Setup
   const [subjectValue, setSubjectValue] = useState('')
   const [subject, setSubject] = useState('')
@@ -664,7 +666,7 @@ export function TutorChat({ child }: Props) {
 
   function handleSubjectChange(value: string) {
     setSubjectValue(value)
-    setSubject(MATERIAS.find((m) => m.value === value)?.label ?? value)
+    setSubject(materias.find((m) => m.value === value)?.label ?? value)
     setTopic('')
   }
 
@@ -691,7 +693,7 @@ export function TutorChat({ child }: Props) {
               className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-[#1D9E75] focus:ring-2 focus:ring-[#1D9E75]/20"
             >
               <option value="">Selecione a matéria</option>
-              {MATERIAS.map((m) => (
+              {materias.map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>

@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import { createSupabaseServerClient } from '@/lib/supabase-server'
 import { ParentDashboard } from '@/components/dashboard/ParentDashboard'
+import { LogoutMenu } from '@/components/dashboard/LogoutMenu'
 import type { ParentProfile, Child, SessionHistory } from '@/types'
 
 export default async function DashboardPage() {
@@ -27,7 +27,7 @@ export default async function DashboardPage() {
   // 3. Buscar filhos da tabela children
   const { data: childrenRows } = await supabase
     .from('children')
-    .select('id, name, grade, age, tenant_id')
+    .select('id, name, grade, age, tenant_id, access_token')
     .eq('tenant_id', parent.tenant_id)
     .order('name')
 
@@ -57,20 +57,7 @@ export default async function DashboardPage() {
           <span className="text-base font-bold text-gray-900">
             Junto <span className="text-[#1D9E75]">EDU</span>
           </span>
-          <nav className="flex items-center gap-4">
-            <Link
-              href="/tutor"
-              className="text-sm font-medium text-gray-600 hover:text-[#1D9E75] transition-colors"
-            >
-              Tutor IA
-            </Link>
-            <div
-              title={parent.name}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1D9E75]/10 text-sm font-bold text-[#1D9E75]"
-            >
-              {parent.name[0]}
-            </div>
-          </nav>
+          <LogoutMenu name={parent.name} email={user.email ?? ''} />
         </div>
       </header>
 

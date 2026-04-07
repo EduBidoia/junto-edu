@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { MATERIAS_POR_SERIE } from '@/lib/materias'
 
 // ─── Tipos locais do formulário ───────────────────────────────────────────────
 
@@ -16,11 +17,7 @@ interface Step2Data {
   age: string
 }
 
-const GRADES = [
-  '1º ano EF', '2º ano EF', '3º ano EF', '4º ano EF', '5º ano EF',
-  '6º ano EF', '7º ano EF', '8º ano EF', '9º ano EF',
-  '1º ano EM', '2º ano EM', '3º ano EM',
-]
+const GRADES = Object.keys(MATERIAS_POR_SERIE)
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 

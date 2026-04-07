@@ -10,6 +10,15 @@ import { NextResponse, type NextRequest } from 'next/server'
 const PROTECTED = ['/dashboard', '/tutor', '/onboarding']
 const PUBLIC_AUTH = ['/login']
 
+// Rotas de /tutor que não exigem autenticação de pai:
+// /tutor/acesso/[token] — link permanente do filho
+// /tutor/[childId]?t=[token] — acesso via token na query string
+function isTutorPublic(pathname: string, searchParams: URLSearchParams): boolean {
+  if (pathname.startsWith('/tutor/acesso/')) return true
+  if (/^\/tutor\/[^/]+$/.test(pathname) && searchParams.has('t')) return true
+  return false
+}
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request })
 
@@ -43,9 +52,10 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getSession()
   const user = session?.user ?? null
 
-  const { pathname } = request.nextUrl
+  const { pathname, searchParams } = request.nextUrl
 
   const isProtected = PROTECTED.some((p) => pathname.startsWith(p))
+    && !isTutorPublic(pathname, searchParams)
   const isPublicAuth = PUBLIC_AUTH.some((p) => pathname === p)
 
   if (isProtected && !user) {

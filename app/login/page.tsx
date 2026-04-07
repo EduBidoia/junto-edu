@@ -31,13 +31,16 @@ export default function LoginPage() {
         window.location.href = '/dashboard'
       }
     } else {
-      const { error } = await supabase!.auth.signUp({
+      const { data, error } = await supabase!.auth.signUp({
         email,
         password,
         options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
       })
       if (error) {
         setError(error.message)
+      } else if (data.session) {
+        // Email confirmation disabled — session created immediately
+        window.location.href = '/dashboard'
       } else {
         setInfo('Verifique seu e-mail para confirmar o cadastro.')
         setEmail('')

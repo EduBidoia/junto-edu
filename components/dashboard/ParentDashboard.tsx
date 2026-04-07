@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { Card } from '@/components/ui/Card'
 import { AddChildModal } from '@/components/dashboard/AddChildModal'
+import { ShareChildButton } from '@/components/dashboard/ShareChildButton'
 import type { ParentProfile, Child, SessionHistory } from '@/types'
 
 interface Props {
@@ -35,12 +36,8 @@ export function ParentDashboard({ parent, children, recentSessions }: Props) {
         <h2 className="text-base font-semibold text-gray-700 mb-3">Seus filhos</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {children.map((child) => (
-            <Link
-              key={child.id}
-              href={`/tutor/${child.id}`}
-              className="block rounded-2xl border border-gray-100 bg-white shadow-sm p-6 hover:border-[#1D9E75]/40 hover:shadow-md transition-all"
-            >
-              <div className="flex items-center gap-4">
+            <div key={child.id} className="flex flex-col gap-3 rounded-2xl border border-gray-100 bg-white shadow-sm p-5 hover:border-[#1D9E75]/40 hover:shadow-md transition-all">
+              <Link href={`/tutor/${child.id}`} className="flex items-center gap-4">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#1D9E75]/10 text-lg font-bold text-[#1D9E75]">
                   {child.name[0]}
                 </div>
@@ -55,8 +52,20 @@ export function ParentDashboard({ parent, children, recentSessions }: Props) {
                 <span className="shrink-0 rounded-lg bg-[#1D9E75]/10 px-3 py-1.5 text-xs font-medium text-[#1D9E75]">
                   Tutor →
                 </span>
-              </div>
-            </Link>
+              </Link>
+
+              {child.access_token && (
+                <div className="flex items-center justify-between border-t border-gray-50 pt-3">
+                  <p className="text-xs text-gray-400">
+                    Mande o link para {child.name.split(' ')[0]} acessar pelo celular
+                  </p>
+                  <ShareChildButton
+                    childName={child.name.split(' ')[0]}
+                    accessToken={child.access_token}
+                  />
+                </div>
+              )}
+            </div>
           ))}
         </div>
 
